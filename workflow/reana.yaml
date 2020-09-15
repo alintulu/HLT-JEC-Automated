@@ -1,0 +1,10 @@
+version: 0.6.0
+inputs:
+  files:
+    - reana.yaml
+    - workflow.yaml
+    - steps.yaml
+    - files.yml
+workflow:
+  type: yadage
+  file: workflow.yaml

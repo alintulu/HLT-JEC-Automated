@@ -1,0 +1,480 @@
+ntuple:
+    process:
+      process_type: string-interpolated-cmd
+      cmd: echo does nothing
+    environment:
+      environment_type: localproc-env
+    publisher:
+      publisher_type: interpolated-pub
+      publish:
+        ntuple_file: '{output_file}'
+  
+  initialise:
+    process:
+      process_type: interpolated-script-cmd
+      interpreter: bash
+      script: |
+        cp {input_file} {output_file}
+    publisher:
+      publisher_type: fromyaml-pub
+      yamlfile: 'files.yml'
+    environment:
+      environment_type: docker-encapsulated
+      image: alintulu/cmssw
+      imagetag: 10_6_12-comparison-plots
+  
+  create_PU_dist:
+    process:
+      process_type: interpolated-script-cmd
+      interpreter: zsh
+      script: |
+        echo "Setting up {release}"
+        source /opt/cms/cmsset_default.sh
+        cd $HOME/{release}/src
+        eval `scramv1 runtime -sh`
+  
+        cp $HOME/JetMETAnalysis/workflow/HTCondor/Files/MyMCPileupHistogram.root {PU_dist_mc} 
+    environment:
+      environment_type: docker-encapsulated
+      image: alintulu/cmssw
+      imagetag: 10_6_12-comparison-plots
+    publisher:
+      publisher_type: interpolated-pub
+      publish:
+        PU_dist_mc: '{PU_dist_mc}'
+  
+  list_lumi:
+    process:
+      process_type: interpolated-script-cmd
+      interpreter: bash
+      script: |
+        echo "Setting up {release}"
+        source /opt/cms/cmsset_default.sh
+        cd $HOME/{release}/src
+        eval `scramv1 runtime -sh`
+  
+        algorithm=$(echo {algo}{cone_size}{jet_type} | tr '[:upper:]' '[:lower:]')
+  
+        files="{input_file}"
+  
+        for file in {input_file}; do
+          n=0
+          until [ "$n" -ge 5 ]; do
+            ls $file
+            root -q -b $file
+            if [ $? -eq 255 ]; then
+              break
+            fi
+            n=$(($n+1)) 
+            sleep 10
+          done
+  
+          if [ "$n" == 5 ]; then
+            echo "!!!!!!! $file corrupted! Removing it from the list. !!!!!!!"
+            echo -n "$files ==> "
+            files=$(echo $files | sed s@"$file"@@)
+            echo $files
+          fi
+        done
+        
+        for i in $files; do
+          ./RunListRunLumi $i $algorithm >> {output_file};
+        done
+    environment:
+      environment_type: docker-encapsulated
+      image: alintulu/cmssw
+      imagetag: 10_6_12-comparison-plots
+    publisher:
+      publisher_type: interpolated-pub
+      publish:
+        lumi_file: '{output_file}'
+  
+  match_lumi:
+    process:
+      process_type: interpolated-script-cmd
+      interpreter: bash
+      script: |
+        echo "Setting up {release}"
+        source /opt/cms/cmsset_default.sh
+        cd $HOME/{release}/src
+        eval `scramv1 runtime -sh`
+  
+        cat {lumi_file_noPU} {lumi_file_PU} | ./RunMatchFiles > MatchedFiles
+        echo 'MatchedFiles:' > {output_file}
+        ./RunPrepareMatching MatchedFiles {batch_size} >> {output_file}
+    publisher:
+      publisher_type: fromyaml-pub
+      yamlfile: 'Matchedfiles.yml'
+    environment:
+      environment_type: docker-encapsulated
+      image: alintulu/cmssw
+      imagetag: 10_6_12-comparison-plots
+  
+  match_jets:
+    process:
+      process_type: interpolated-script-cmd
+      interpreter: bash
+      script: | 
+        echo "Setting up {release}"
+        source /opt/cms/cmsset_default.sh
+        cd $HOME/{release}/src
+        eval `scramv1 runtime -sh`
+        cp $HOME/JetMETAnalysis/workflow/HTCondor/Files/My*.root .
+  
+        echo I will sleep for $(({sleep}*10)) minutes
+        echo Time when sleep started $(date +"%T")
+  
+        sleep $(({sleep}*10))m
+  
+        echo Time when sleep is over $(date +"%T")
+        echo Starting to hadd..
+  
+        read -r NoPUFile PUFile <<<$(echo {input_file})
+  
+        NoPUFile=$(echo $NoPUFile | tr ':' ' ')
+        PUFile=$(echo $PUFile | tr ':' ' ')
+  
+        echo "!!!!!!!"
+        echo $PUFile
+        echo "!!!!!!!"
+  
+        nopu_files="$NoPUFile"
+        pu_files="$PUFile"
+  
+        hadd -f -k -n 5 {output_path}/NoPUFile.root $nopu_files
+        hadd -f -k -n 5 {output_path}/PUFile.root $pu_files
+  
+        algorithm=$(echo {algo}{cone_size}{jet_type} | tr '[:upper:]' '[:lower:]')
+  
+        jet_synchtest_x \
+          -basepath '//' \
+          -samplePU {output_path}/PUFile.root \
+          -sampleNoPU {output_path}/NoPUFile.root \
+          -algo1 $algorithm \
+          -algo2 $algorithm \
+          -iftest false \
+          -maxEvts 10000000 \
+          -ApplyJEC false \
+          -outputPath {output_path} \
+          -npvRhoNpuBinWidth 10 \
+          -NBinsNpvRhoNpu 6 \
+          -MCPUReWeighting {PU_dist_mc} \
+          -DataPUReWeighting `pwd`/MyDataPileupHistogram.root \
+          -useweight true \
+          -nrefmax 3 \
+          -doNotSave true
+  
+        mv {output_path}/output_*.root {output_path}/Matchedjets.root
+  
+        rm {output_path}/NoPUFile.root
+        rm {output_path}/PUFile.root
+    environment:
+      environment_type: docker-encapsulated
+      image: alintulu/cmssw
+      imagetag: 10_6_12-comparison-plots
+    publisher:
+      publisher_type: interpolated-pub
+      publish:
+        matched_file: '{output_file}'
+        PU_dist_mc: '{PU_dist_mc}'
+  
+  compute_l1:
+    process:
+      process_type: interpolated-script-cmd
+      interpreter: zsh
+      script: | 
+        echo "Setting up {release}"
+        source /opt/cms/cmsset_default.sh
+        cd $HOME/{release}/src
+        eval `scramv1 runtime -sh`
+  
+        algorithm=$(echo {algo}{cone_size}{jet_type} | tr '[:upper:]' '[:lower:]')
+        merge=output_$(echo {algo}{cone_size}{jet_type} | tr '[:upper:]' '[:lower:]').root
+  
+        hadd -k -f -n 5 {output_path}/$merge {input_file}
+  
+        jet_synchfit_x \
+          -inputDir {output_path} \
+          -outputDir {output_path} \
+          -algo1 $algorithm \
+          -algo2 $algorithm \
+          -highPU false \
+          -useNPU false \
+          -functionType standard \
+          -era {era}PreDeriveL1
+  
+        root -b -q -l `printf "deriveL1.C+(\"{output_path}\",\"$algorithm\",\"{algo}{cone_size}{jet_type}\",\"{era}\")"`
+        mv *.txt {output_path}
+        rm {output_path}/*.root
+    environment:
+      environment_type: docker-encapsulated
+      image: alintulu/cmssw
+      imagetag: 10_6_12-comparison-plots
+    publisher:
+      publisher_type: interpolated-pub
+      publish:
+        l1_corr: '{output_file}'
+  
+  apply_l1:
+    process:
+      process_type: interpolated-script-cmd
+      interpreter: zsh
+      script: |
+        echo "Setting up {release}"
+        source /opt/cms/cmsset_default.sh
+        cd $HOME/{release}/src
+        eval `scramv1 runtime -sh`
+        cp {l1_corr} {era}_L1FastJet_{algo}{cone_size}{jet_type}.txt
+  
+        algorithm=$(echo {algo}{cone_size}{jet_type} | tr '[:upper:]' '[:lower:]')
+  
+        hadd -k -f -n 5 {output_merged} {input_file}
+  
+        jet_apply_jec_x \
+          -input {output_merged} \
+          -output {output_file} \
+          -jecpath $PWD \
+          -era {era} \
+          -levels 1 \
+          -algs $algorithm \
+          -L1FastJet true \
+          -saveitree false
+    environment:
+      environment_type: docker-encapsulated
+      image: alintulu/cmssw
+      imagetag: 10_6_12-comparison-plots
+    publisher:
+      publisher_type: interpolated-pub
+      publish:
+        applied_l1: '{output_file}'
+        merged: '{output_merged}'
+  
+  histogram:
+    process:
+      process_type: interpolated-script-cmd
+      interpreter: zsh
+      script: |
+        echo "Setting up {release}"
+        source /opt/cms/cmsset_default.sh
+        cd $HOME/{release}/src
+        eval `scramv1 runtime -sh`
+        cp $HOME/JetMETAnalysis/workflow/HTCondor/Files/My*.root .
+        cp $HOME/JetMETAnalysis/JetAnalyzers/config/jra_dr_finebinning.config jra.config
+  
+        algorithm=$(echo {algo}{cone_size}{jet_type} | tr '[:upper:]' '[:lower:]'):0.25
+  
+        jet_response_analyzer_x jra.config \
+          -input {input_file} \
+          -nbinsabsrsp 0 \
+          -nbinsetarsp 0 \
+          -nbinsphirsp 0 \
+          -nbinsrelrsp 200 \
+          -doflavor false \
+          -flavorDefinition phys \
+          -output {output_file} \
+          -useweight true \
+          -nrefmax 3 \
+          -algs $algorithm \
+          -relrspmin 0.0 \
+          -relrspmax 2.0
+    environment:
+      environment_type: docker-encapsulated
+      image: alintulu/cmssw
+      imagetag: 10_6_12-comparison-plots
+    publisher:
+      publisher_type: interpolated-pub
+      publish:
+        histo: '{output_file}'
+  
+  compute_l2l3:
+    process:
+      process_type: interpolated-script-cmd
+      interpreter: zsh
+      script: |
+        echo "Setting up {release}"
+        source /opt/cms/cmsset_default.sh
+        cd $HOME/{release}/src
+        eval `scramv1 runtime -sh`
+  
+        hadd -k -f -n 5 {output_path}/Merged.root {input_file}
+  
+        algorithm=$(echo {algo}{cone_size}{jet_type} | tr '[:upper:]' '[:lower:]')l1
+  
+        jet_l2_correction_x \
+          -input {output_path}/Merged.root \
+          -algs $algorithm \
+          -era {era} \
+          -output l2.root \
+          -outputDir {output_path}/ \
+          -makeCanvasVariable AbsCorVsJetPt:JetEta \
+          -l2l3 true \
+          -batch true \
+          -histMet median \
+          -delphes false \
+          -maxFitIter 30 \
+          -l2calofit DynamicMin \
+          -l2pffit Standard+Gaussian \
+          -ptclipfit true
+  
+        cp {output_path}/{era}*.txt {output_path}/L2Relative.txt
+    environment:
+      environment_type: docker-encapsulated
+      image: alintulu/cmssw
+      imagetag: 10_6_12-comparison-plots
+    publisher:
+      publisher_type: interpolated-pub
+      publish:
+        l2l3_corr: '{output_file}'
+  
+  closure:
+    process:
+      process_type: interpolated-script-cmd
+      interpreter: zsh
+      script: |
+        echo "Setting up {release}"
+        source /opt/cms/cmsset_default.sh
+        cd $HOME/{release}/src
+        eval `scramv1 runtime -sh`
+        cp $HOME/JetMETAnalysis/workflow/HTCondor/Files/My*.root .
+        cp {l2l3_corr} {era}_L2Relative_{algo}{cone_size}{jet_type}.txt
+  
+        algorithm=$(echo {algo}{cone_size}{jet_type} | tr '[:upper:]' '[:lower:]')
+  
+        inputFileNamePath=$(echo {input_file} | rev | cut -d"/" -f2-  | rev)
+        inputFileName=$(echo {input_file} | rev | cut -d"/" -f1  | rev | cut -d"." -f1)
+  
+        jet_correction_analyzer_x \
+          -inputFilename $inputFileName \
+          -inputFilePath $inputFileNamePath \
+          -outputDir {output_path}/ \
+          -path $PWD \
+          -era {era} \
+          -levels 2 \
+          -useweight true \
+          -algs $algorithm \
+          -drmax 0.2 \
+          -evtmax 0 \
+          -nbinsrelrsp 200 \
+          -relrspmin 0.0 \
+          -relrspmax 2.0 \
+          -nrefmax 3
+  
+        rm {input_file}
+        mv {output_path}/Closure_*.root {output_path}/Closure.root
+    environment:
+      environment_type: docker-encapsulated
+      image: alintulu/cmssw
+      imagetag: 10_6_12-comparison-plots
+    publisher:
+      publisher_type: interpolated-pub
+      publish:
+        closure: '{output_file}'
+  
+  plot_closure:
+    process:
+      process_type: interpolated-script-cmd
+      interpreter: zsh
+      script: |
+        mkdir -p {output_path}
+        echo "Setting up {release}"
+        source /opt/cms/cmsset_default.sh
+        cd $HOME/{release}/src
+        eval `scramv1 runtime -sh`
+        
+        hadd -k -f -n 5 {output_path}/Merged.root {input_file}
+  
+        jet_draw_closure_x \
+          -doPt true \
+          -doEta true \
+          -path {output_path} \
+          -filename Merged \
+          -basepath {output_path} \
+          -histMet median \
+          -outputDir {output_path} \
+          -draw_guidelines true \
+          -doRatioPt false \
+          -doRatioEta false
+    environment:
+      environment_type: docker-encapsulated
+      image: alintulu/cmssw
+      imagetag: 10_6_12-comparison-plots
+    publisher:
+      publisher_type: interpolated-pub
+      publish:
+        closure: '{output_file}'
+  
+  plot_comparison:
+    process:
+      process_type: interpolated-script-cmd
+      interpreter: zsh
+      script: |
+        echo "Setting up {release}"
+        source /opt/cms/cmsset_default.sh
+        cd $HOME/{release}/src
+        eval `scramv1 runtime -sh`
+  
+        mkdir -p JECDatabase/{era}
+        cp {l1_corr} JECDatabase/{era}/{era}_L1FastJet_{algo}{cone_size}{jet_type}.txt
+        cp {l2l3_corr} JECDatabase/{era}/{era}_L2L3Residual_{algo}{cone_size}{jet_type}.txt
+  
+        echo "Downloading corrections from Github.."
+        rawPath=https://raw.githubusercontent.com/cms-jet/JECDatabase/master/textFiles
+        for version in {versions}; do
+            mkdir -p JECDatabase/$version
+            for level in {levels}; do
+                wget $rawPath/$version/$version\_$level\_{algo}{cone_size}{jet_type}.txt -P JECDatabase/$version
+            done
+            wget $rawPath/$version/$version\_"Uncertainty"_{algo}{cone_size}{jet_type}.txt -P JECDatabase/$version
+        done
+  
+        versions=$(echo "{era} {versions}" | sed -e 's/\s\+/,/g')
+        echo "Computing Eta dependent comparisons.."
+        for level in {levels}; do
+            echo "  Level" $level
+            for pt in {fix_pt}; do
+                echo "    PT" $pt
+                for rho in {fix_rho}; do  
+                echo "      Rho" $rho
+                ./Execute --Version $versions --Algorithm {algo}{cone_size}{jet_type} --Level $level --Dependent Eta --Min -5.18 --Max 5.18 --NBin -1 --FixPT $pt --FixRho $rho >> EtaDependent.txt
+                done
+            done
+        done
+  
+        python PlotCompareVersions.py --Dependent Eta --Levels {levels} --Versions {era} {versions} --OutputPath {output_path}
+  
+        echo "Computing PT dependent comparisons.."
+        for level in {levels}; do
+            echo "  Level" $level
+            for eta in {fix_eta}; do
+                echo "    Eta" $eta
+                for rho in {fix_rho}; do 
+                    echo "      Rho" $rho
+                    ./Execute --Version $versions --Algorithm {algo}{cone_size}{jet_type} --Level $level --Dependent PT --Min 1 --Max 7000 --NBin 100 --FixEta $eta --FixRho $rho >> PTDependent.txt
+                done
+            done
+        done
+  
+        python PlotCompareVersions.py --Dependent PT --Levels {levels} --Versions {era} {versions} --OutputPath {output_path}
+  
+        echo "Computing Rho dependent comparisons.."
+        for level in {levels}; do
+            echo "  Level" $level
+            for eta in {fix_eta}; do
+                echo "    Eta" $eta
+                for pt in {fix_pt}; do 
+                    echo "      PT" $pt
+                    ./Execute --Version $versions --Algorithm {algo}{cone_size}{jet_type} --Level $level --Dependent Rho --Min 0 --Max 70 --NBin 50 --FixPT $pt --FixEta $eta >> RhoDependent.txt
+                done
+            done
+        done
+  
+        python PlotCompareVersions.py --Dependent Rho --Levels {levels} --Versions {era} {versions} --OutputPath {output_path}
+    environment:
+      environment_type: docker-encapsulated
+      image: alintulu/cmssw
+      imagetag: 10_6_12-comparison-plots
+    publisher:
+      publisher_type: interpolated-pub
+      publish:
+        comparison: '{output_file}'
+  

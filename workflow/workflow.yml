@@ -1,0 +1,74 @@
+stages:
+  - name: initialise
+    scheduler:
+      scheduler_type: singlestep-stage
+      parameters:
+        input_file: '$REANA_WORKSPACE/files.yml'
+        output_file: '{workdir}/files.yml'
+      step: {$ref: steps.yaml#/initialise}
+
+  - name: histogram
+    dependencies: [initialise]
+    scheduler:
+    scheduler_type: singlestep-stage
+    parameters:
+        input_file: {stages: init, output: output_file}
+        algo: 'AK'
+        cone_size: '4'
+        jet_type: 'PUPPI'
+        era: 'Phase2HLTTDR'
+        release: 'CMSSW_10_6_12'
+        scram_arch: 'slc7_amd64_gcc700'
+        output_path: '{workdir}'
+        output_file: '{workdir}/jra_jecl1.root'
+    step: {$ref: 'steps.yaml#/histogram'}
+
+  - name: compute_l2l3
+    dependencies: [histogram]
+    scheduler:
+      scheduler_type: singlestep-stage
+      parameters:
+        input_file: {stages: 'histogram', output: histo}
+        algo: 'AK'
+        cone_size: '4'
+        jet_type: 'PUPPI'
+        era: 'Phase2HLTTDR'
+        release: 'CMSSW_10_6_12'
+        scram_arch: 'slc7_amd64_gcc700'
+        output_path: '{workdir}'
+        output_file: '{workdir}/L2Relative.txt'
+      step: {$ref: 'steps.yaml#/compute_l2l3'}
+
+  - name: closure
+    dependencies: [compute_l2l3]
+    scheduler:
+      scheduler_type: multistep-stage
+      parameters:
+        l1_corr: {stages: 'compute_l1', output: l1_corr}
+        l2l3_corr: {stages: 'compute_l2l3', output: l2l3_corr}
+        input_file: {stages: 'higher_level[*].apply_l1', output: merged}
+        algo: 'AK'
+        cone_size: '4'
+        jet_type: 'PUPPI'
+        era: 'Phase2HLTTDR'
+        release: 'CMSSW_10_6_12'
+        scram_arch: 'slc7_amd64_gcc700'
+        PU_dist_mc: {stages: 'create_PU_dist', output: PU_dist_mc}
+        output_path: '{workdir}'
+        output_file: '{workdir}/Closure.root'
+      scatter:
+        method: zip
+        parameters: [input_file]
+      step: {$ref: 'steps.yaml#/closure'}
+
+  - name: plots_closure
+    dependencies: [closure]
+    scheduler:
+      scheduler_type: singlestep-stage
+      parameters:
+        input_file: {stages: 'closure', output: closure}
+        release: 'CMSSW_10_6_12'
+        scram_arch: 'slc7_amd64_gcc700'
+        output_path: '{workdir}/'
+        output_file: '{workdir}/Closure.root'
+      step: {$ref: 'steps.yaml#/plot_closure'}
