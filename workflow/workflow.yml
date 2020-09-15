@@ -12,7 +12,7 @@ stages:
     scheduler:
       scheduler_type: multistep-stage
       parameters:
-        input_file: {stages: initialise, output: output_file}
+        input_file: {stages: 'initialise', output: PU_files, unwrap: true}
         algo: 'AK'
         cone_size: '4'
         jet_type: 'PUPPI'
@@ -48,7 +48,7 @@ stages:
       scheduler_type: multistep-stage
       parameters:
         l2l3_corr: {stages: 'compute_l2l3', output: l2l3_corr}
-        input_file: {stages: initialise, output: output_file}
+        input_file: {stages: 'initialise', output: PU_files, unwrap: true}
         algo: 'AK'
         cone_size: '4'
         jet_type: 'PUPPI'
